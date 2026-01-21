@@ -1,32 +1,36 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Tab, Tabs, TabList, TabPanel } from 'react-tabs';
 import Swal from 'sweetalert2';
-import { Download, Upload, Copy, Wallet, Trash2, SquareMousePointer, RefreshCw, Coins, Users, DollarSign } from 'lucide-react';
+import { Download, Upload, Copy, Wallet, Trash2, SquareMousePointer, RefreshCw, Coins } from 'lucide-react';
 import { ethers } from 'ethers';
 import { pokerLobbyAddress, pokerLobbyABI, pokerChipsAddress, pokerChipsABI } from './Contracts';
 import Utils from './Utils';
 import 'react-tabs/style/react-tabs.css';
 import './Lobby.css';
 
-let provider = new ethers.JsonRpcProvider('https://sepolia.base.org');
-
-
 const Lobby = () => {
-  const [wallet, setWallet] = useState( {address: 'loading...' });
+  const [, setWallet] = useState( {address: 'loading...' });
   const [balances, setBalances] = useState({ eth: 0, pkr: 0 });
   const [cashGames, setCashGames] = useState([]);
   const [sitAndGoGames, setSitAndGoGames] = useState([]);
   const [newGame, setNewGame] = useState({ gameType: "CASH", maxPlayers: 6, bigBlind: 2, token: "PKR", startingChips: 2000, buyIn: 10, blindDuration: 10, privateGame: false });
+  const [busyAction, setBusyAction] = useState('');
+  const [rpcUrl, setRpcUrl] = useState(Utils.getRpcUrl());
+  const ZERO_HASH = ethers.ZeroHash;
 
   const backupWallet = async () => {
-    const virtualWallet = await Utils.loadWallet();
-    prompt("Your Private Key", virtualWallet.privateKey);
+    const { signer } = await Utils.loadWallet();
+    if (signer?.privateKey) {
+      prompt("Your Private Key", signer.privateKey);
+    } else {
+      Swal.fire({ title: 'No Private Key', text: 'This wallet is managed by MetaMask.', icon: 'info' });
+    }
   }
 
   const restoreWallet = async () => {
     if (await Swal.fire({ title: 'Restore Wallet?', text: "Make sure you have backed up your current wallet if it has any funds in it", icon: 'warning', showCancelButton: true, confirmButtonText: 'Yes' }).then(result => result.isConfirmed)) {
       const pk = prompt('Enter a private key');
-      if (pk == '') return;
+      if (pk === '') return;
       const tmpWallet = new ethers.Wallet(pk);
       const newWallet = { name: `Imported Wallet`, privateKey: tmpWallet.privateKey, address: tmpWallet.address, type: 'virtual' }
       localStorage.setItem('wallet', JSON.stringify(newWallet));
@@ -43,40 +47,40 @@ const Lobby = () => {
     }
   }
 
-  const createWallet = async () => {
-    const tmpWallet = ethers.Wallet.createRandom();
-    const walletAddress = await tmpWallet.getAddress();
-    const newWallet = { name: `Virtual Wallet 1`, privateKey: tmpWallet.privateKey, address: walletAddress, type: 'virtual' }
-    const walletJSON = JSON.stringify(newWallet);
-    localStorage.setItem('wallet', walletJSON);
-    setWallet(walletJSON);
-  }
-
   const connectWallet = async () => {
     if (await Swal.fire({ title: 'Are you sure?', text: "This will overwrite your virtual wallet and you'll need to confirm each transaction in metamask", icon: 'warning', showCancelButton: true, confirmButtonText: 'Yes Connect' }).then(result => result.isConfirmed)) {
-      provider = new ethers.BrowserProvider(window.ethereum)
-      const signer = await provider.getSigner();
-      const network = await provider.getNetwork();
-      if (network.chainId !== 84532n) alert('Please set your network to Base Sepolia Testnet or visit Chainlist.org');
-      const newWallet = { name: `Browser Wallet`, privateKey: null, address: signer.address, type: 'browser' }
-      localStorage.setItem('wallet', JSON.stringify(newWallet));
-        
-      window.ethereum.on('accountsChanged', () => { connectWallet() });
-      window.ethereum.on('network', () => { connectWallet() });
-      setWallet(JSON.stringify(newWallet));
+      try {
+        setBusyAction('connectWallet');
+        await Utils.switchToBaseSepolia();
+        const provider = new ethers.BrowserProvider(window.ethereum);
+        const signer = await provider.getSigner();
+        const network = await provider.getNetwork();
+        if (!Utils.isBaseSepolia(network.chainId)) alert('Please set your network to Base Sepolia Testnet or visit Chainlist.org');
+        const newWallet = { name: 'Browser Wallet', privateKey: null, address: signer.address, type: 'browser' };
+        localStorage.setItem('wallet', JSON.stringify(newWallet));
+        window.ethereum.on('accountsChanged', () => { connectWallet() });
+        window.ethereum.on('network', () => { connectWallet() });
+        setWallet(JSON.stringify(newWallet));
+      } catch (error) {
+        console.error(error);
+        Swal.fire({ title: 'Wallet Error', text: error?.message || 'Failed to connect wallet.', icon: 'error' });
+      } finally {
+        setBusyAction('');
+      }
     }
   }
   
-  const getWallet = () => {
+  const getWallet = useCallback(() => {
     let walletJSON = localStorage.getItem('wallet');
     if (walletJSON === null) return 'Loading...';
     return JSON.parse(walletJSON);
-  }
+  }, []);
 
-  const updateBalances = async () => {
+  const updateBalances = useCallback(async () => {
     console.log('Updating balances...');
     try {
       const myWallet = getWallet();
+      const provider = Utils.getProvider();
       const pokerChips = new ethers.Contract(pokerChipsAddress, pokerChipsABI, provider);
       const eth = ethers.formatEther(await provider.getBalance(myWallet.address));
       const pkr = ethers.formatUnits(await pokerChips.balanceOf(myWallet.address), 6);
@@ -84,11 +88,12 @@ const Lobby = () => {
     } catch (err) {
       console.log(err);
     }
-  }
+  }, [getWallet]);
 
-  const findGames = async () => {
+  const findGames = useCallback(async () => {
     console.log('Finding games...');
     try {
+      const provider = Utils.getProvider();
       const pokerLobby = new ethers.Contract(pokerLobbyAddress, pokerLobbyABI, provider);
       const latestCashGames = await pokerLobby.latestCashGames(10);
       const latestSitAndGoGames = await pokerLobby.latestSitAndGoGames(10);
@@ -97,12 +102,7 @@ const Lobby = () => {
     } catch (err) {
       console.log(err);
     }
-  }
-
-  const loadGame = async (gid) => {
-    alert('coming soon');
-    window.location = `/#/table?gid=0`;
-  }
+  }, []);
 
   const handleNewGameChange = (e) => {
     const { name, value } = e.target;
@@ -112,10 +112,149 @@ const Lobby = () => {
     });
   };
 
+  const handleRpcUrlChange = (e) => {
+    setRpcUrl(e.target.value);
+  };
+
+  const saveRpcUrl = async () => {
+    const trimmed = rpcUrl.trim();
+    if (!trimmed) {
+      Swal.fire({ title: 'RPC URL Required', text: 'Enter a valid Base Sepolia RPC URL.', icon: 'warning' });
+      return;
+    }
+    try {
+      setBusyAction('rpc');
+      await Utils.testRpcUrl(trimmed);
+      Utils.setRpcUrl(trimmed);
+      Swal.fire({ title: 'RPC Saved', text: 'RPC endpoint updated. Reconnect MetaMask if it is using the old RPC.', icon: 'success' });
+    } catch (error) {
+      console.error(error);
+      Swal.fire({ title: 'RPC Error', text: error?.message || 'Unable to reach that RPC endpoint.', icon: 'error' });
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  const resetRpcUrl = () => {
+    Utils.setRpcUrl('');
+    setRpcUrl(Utils.getRpcUrl());
+    Swal.fire({ title: 'RPC Reset', text: 'RPC endpoint reset to the default Base Sepolia RPC.', icon: 'success' });
+  };
+
+  const isPublicGame = (invitePublicKey) => {
+    if (!invitePublicKey) return true;
+    return invitePublicKey === ZERO_HASH;
+  };
+
+  const joinGame = async (game, gameType) => {
+    const maxPlayers = Number(game.maxPlayers ?? 0);
+    const seatOptions = Array.from({ length: maxPlayers }, (_, index) => (
+      `<option value="${index}">${index}</option>`
+    )).join('');
+    const gameId = game.gid.toString();
+    const savedInviteKey = localStorage.getItem(`inviteKey_${gameId}`) || '';
+    const needsInvite = !isPublicGame(game.invitePublicKey);
+
+    const { value: formValues } = await Swal.fire({
+      title: `Join Game #${gameId}`,
+      html: `
+        <div style="text-align:left">
+          <label for="join-seat">Seat</label>
+          <select id="join-seat" class="swal2-input">${seatOptions}</select>
+          <label for="join-invite">Invite Key (private games only)</label>
+          <input id="join-invite" class="swal2-input" placeholder="0x..." value="${savedInviteKey}">
+        </div>
+      `,
+      focusConfirm: false,
+      showCancelButton: true,
+      confirmButtonText: 'Approve + Join',
+      preConfirm: () => {
+        const seat = document.getElementById('join-seat').value;
+        const inviteKey = document.getElementById('join-invite').value.trim();
+        return { seat, inviteKey };
+      },
+    });
+
+    if (!formValues) return;
+    if (needsInvite && !formValues.inviteKey) {
+      Swal.fire({ title: 'Invite Key Required', text: 'This game is private. Paste the invite key to join.', icon: 'error' });
+      return;
+    }
+
+    try {
+      setBusyAction('join');
+      Swal.fire({ title: 'Joining game...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+      const { signer, wallet } = await Utils.loadWallet();
+      const pokerLobby = new ethers.Contract(pokerLobbyAddress, pokerLobbyABI, signer);
+      const pokerChips = new ethers.Contract(pokerChipsAddress, pokerChipsABI, signer);
+      const handKeys = Utils.ensureHandKeys(gameId);
+      const invitePrivateKey = needsInvite ? formValues.inviteKey : ZERO_HASH;
+      const buyIn = gameType === 'SNG' ? (game.buyIn ?? 0n) : (game.bigBlind * 100n);
+
+      const allowance = await pokerChips.allowance(wallet.address, pokerLobbyAddress);
+      if (allowance < buyIn) {
+        const allowanceText = ethers.formatUnits(allowance, 6);
+        const buyInText = ethers.formatUnits(buyIn, 6);
+        const approvalConfirm = await Swal.fire({
+          title: 'Approve PokerChips?',
+          html: `Required buy-in: <b>${buyInText} PKR</b><br/>Current allowance: <b>${allowanceText} PKR</b>`,
+          icon: 'info',
+          showCancelButton: true,
+          confirmButtonText: 'Approve',
+        });
+        if (!approvalConfirm.isConfirmed) return;
+        await pokerChips.approve(pokerLobbyAddress, buyIn);
+      }
+      if (gameType === 'SNG') {
+        await pokerLobby.registerSitAndGo(game.gid, Number(formValues.seat), handKeys.currentPublicKey, invitePrivateKey);
+      } else {
+        await pokerLobby.joinCashGame(game.gid, Number(formValues.seat), handKeys.currentPublicKey, invitePrivateKey);
+      }
+      if (needsInvite && formValues.inviteKey) localStorage.setItem(`inviteKey_${gameId}`, formValues.inviteKey);
+      Swal.close();
+      Swal.fire({ title: 'Joined', text: 'You have joined the game. Loading table...', icon: 'success' });
+      window.location = `/#/table?gid=${gameId}`;
+    } catch (error) {
+      console.error(error);
+      Swal.close();
+      Swal.fire({ title: 'Join Failed', text: error?.reason || error?.message || 'Transaction failed.', icon: 'error' });
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  const mintTestChips = async () => {
+    try {
+      setBusyAction('mint');
+      const { signer } = await Utils.loadWallet();
+      const pokerChips = new ethers.Contract(pokerChipsAddress, pokerChipsABI, signer);
+      const mintAmount = ethers.parseUnits('10000', 6);
+      await pokerChips.mint(mintAmount);
+      await updateBalances();
+      Swal.fire({ title: 'Minted', text: '10,000 PKR added to your wallet.', icon: 'success' });
+    } catch (error) {
+      console.error(error);
+      Swal.fire({ title: 'Mint Failed', text: error?.reason || error?.message || 'Unable to mint test chips.', icon: 'error' });
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  const formatBlinds = (bigBlind) => {
+    if (bigBlind === undefined || bigBlind === null) return '-';
+    const smallBlind = bigBlind / 2n;
+    return `${ethers.formatUnits(smallBlind, 6)}/${ethers.formatUnits(bigBlind, 6)}`;
+  };
+
+  const formatBuyIn = (bigBlind) => {
+    if (bigBlind === undefined || bigBlind === null) return '-';
+    return ethers.formatUnits(bigBlind * 100n, 6);
+  };
 
 
   const launchGame = async () => {
     console.log('Launching new game with settings:', newGame);
+    setBusyAction('launch');
     let inviteKeys = {};
     if (newGame.privateGame === true) {
       inviteKeys.publicKey = '0x' + '0'.repeat(64);
@@ -125,38 +264,47 @@ const Lobby = () => {
     const bigBlind = ethers.parseUnits(newGame.bigBlind.toString(), 6);
     let buyIn = ethers.parseUnits((newGame.bigBlind * 100).toString(), 6);
     let gameId;
-    if (newGame.gameType == 'SNG') buyIn = ethers.parseUnits(newGame.buyIn, 6);
+    if (newGame.gameType === 'SNG') buyIn = ethers.parseUnits(newGame.buyIn, 6);
     try {
-        const virtualWallet = await Utils.loadWallet();
-        const pokerLobby = new ethers.Contract(pokerLobbyAddress, pokerLobbyABI, virtualWallet);
+        const { signer } = await Utils.loadWallet();
+        const pokerLobby = new ethers.Contract(pokerLobbyAddress, pokerLobbyABI, signer);
         let tx;
-        if (newGame.gameType == 'CASH') {
+        if (newGame.gameType === 'CASH') {
           tx = await pokerLobby.createCashGame(newGame.maxPlayers, bigBlind, inviteKeys.publicKey, pokerChipsAddress);
-        } else if (newGame.gameType == 'SNG') {
+        } else if (newGame.gameType === 'SNG') {
           tx = await pokerLobby.createSitAndGo(newGame.maxPlayers, bigBlind, newGame.blindDuration, newGame.startingChips, inviteKeys.publicKey, newGame.buyIn, pokerChipsAddress);
         }
         const receipt = await tx.wait();
         gameId = receipt.logs[1].args[0];
-        if (newGame.privateGame === true) localStorage.setItem(`inviteKey_${gameId}`, inviteKeys.privateKey);
+        const gameIdString = gameId.toString();
+        if (newGame.privateGame === true) localStorage.setItem(`inviteKey_${gameIdString}`, inviteKeys.privateKey);
         if (await Swal.fire({ title: 'Join New Game?', text: "For the game to be displayed in the lobby it must have at least one player. Approve spend and then join the game", icon: 'success', showCancelButton: true, confirmButtonText: 'Yes' }).then(result => result.isConfirmed)) {
-          const pokerChips = new ethers.Contract(pokerChipsAddress, pokerChipsABI, virtualWallet);
+          const pokerChips = new ethers.Contract(pokerChipsAddress, pokerChipsABI, signer);
           await pokerChips.approve(await pokerLobbyAddress, buyIn);
-          if (newGame.privateGame == true) {
-            window.location = `/#/table?gid=${gameId}&inviteKey=${inviteKeys.privateKey}`;
+          if (newGame.privateGame === true) {
+            window.location = `/#/table?gid=${gameIdString}&inviteKey=${inviteKeys.privateKey}`;
           } else {
-            window.location = `/#/table?gid=${gameId}`;
+            window.location = `/#/table?gid=${gameIdString}`;
           }
           
         }
     } catch (error) {
         console.error("Failed to create game:", error);
+        const rpcHint = Utils.getRpcErrorHint(error);
+        Swal.fire({ title: 'Create Game Failed', text: rpcHint || error?.reason || error?.message || 'Unable to create game.', icon: 'error' });
+    } finally {
+        setBusyAction('');
     }
   }
 
   useEffect(() => {
     findGames();
     updateBalances();
-  }, []);
+    const interval = setInterval(() => {
+      findGames();
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [findGames, updateBalances]);
 
   return (
   <div className="content">
@@ -179,6 +327,9 @@ const Lobby = () => {
 
       <TabPanel>
         <div>
+          <div className="flex-row flex-center">
+            <button type="button" onClick={() => findGames()} disabled={busyAction !== ''}>Refresh Games</button>
+          </div>
           <table className="lobby-table">
             <thead>
                 <tr>
@@ -186,23 +337,35 @@ const Lobby = () => {
                     <th>Players</th>
                     <th>Blinds</th>
                     <th>Buy In</th>
+                    <th>Access</th>
                     <th>Actions</th>
                 </tr>
             </thead>
             <tbody>
-                <tr>
-                    <td>Multideck Holdem</td>
-                    <td>3/6</td>
-                    <td>1/2</td>
-                    <td>200 PKR</td>
-                    <td><button onClick={() => loadGame(0)}>JOIN</button></td>
-                </tr>
+                {cashGames.filter((game) => game.gid && game.gid > 0n).map((game) => (
+                  <tr key={game.gid.toString()}>
+                    <td>Multideck Holdem #{game.gid.toString()}</td>
+                    <td>{game.activePlayers?.toString?.() ?? game.activePlayers}/{game.maxPlayers?.toString?.() ?? game.maxPlayers}</td>
+                    <td>{formatBlinds(game.bigBlind)}</td>
+                    <td>{formatBuyIn(game.bigBlind)} PKR</td>
+                    <td>{isPublicGame(game.invitePublicKey) ? 'Public' : 'Private'}</td>
+                    <td><button onClick={() => joinGame(game, 'CASH')} disabled={busyAction === 'join'}>JOIN</button></td>
+                  </tr>
+                ))}
+                {cashGames.filter((game) => game.gid && game.gid > 0n).length === 0 && (
+                  <tr>
+                    <td colSpan="6">No active cash games found.</td>
+                  </tr>
+                )}
             </tbody>
           </table>
         </div>
       </TabPanel>
       <TabPanel>
         <div>
+            <div className="flex-row flex-center">
+              <button type="button" onClick={() => findGames()} disabled={busyAction !== ''}>Refresh Games</button>
+            </div>
             <table className="lobby-table">
               <thead>
                   <tr>
@@ -212,28 +375,28 @@ const Lobby = () => {
                       <th>Starting Chips</th>
                       <th>Blind Duration</th>
                       <th>Buy In</th>
+                      <th>Access</th>
                       <th>Actions</th>
                   </tr>
               </thead>
               <tbody>
-                  <tr>
-                      <td>Multideck Holdem</td>
-                      <td>1/6</td>
-                      <td>10/20</td>
-                      <td>2000</td>
-                      <td>10 mins</td>
-                      <td>100 PKR</td>
-                      <td><button onClick={() => loadGame(0)}>JOIN</button></td>
-                  </tr>
-                  <tr>
-                      <td>Multideck Holdem</td>
-                      <td>2/3</td>
-                      <td>1/2</td>
-                      <td>5000</td>
-                      <td>15 mins</td>
-                      <td>50 PKR</td>
-                      <td><button onClick={() => loadGame(0)}>JOIN</button></td>
-                  </tr>
+                  {sitAndGoGames.filter((game) => game.gid && game.gid > 0n).map((game) => (
+                    <tr key={game.gid.toString()}>
+                      <td>Multideck Sit &amp; Go #{game.gid.toString()}</td>
+                      <td>{game.activePlayers?.toString?.() ?? game.activePlayers}/{game.maxPlayers?.toString?.() ?? game.maxPlayers}</td>
+                      <td>{formatBlinds(game.bigBlind)}</td>
+                      <td>{game.startingChips?.toString?.() ?? game.startingChips}</td>
+                      <td>{game.blindDuration?.toString?.() ?? game.blindDuration} mins</td>
+                      <td>{ethers.formatUnits(game.buyIn ?? 0n, 6)} PKR</td>
+                      <td>{isPublicGame(game.invitePublicKey) ? 'Public' : 'Private'}</td>
+                      <td><button onClick={() => joinGame(game, 'SNG')} disabled={busyAction === 'join'}>JOIN</button></td>
+                    </tr>
+                  ))}
+                  {sitAndGoGames.filter((game) => game.gid && game.gid > 0n).length === 0 && (
+                    <tr>
+                      <td colSpan="8">No active sit &amp; go games found.</td>
+                    </tr>
+                  )}
               </tbody>
             </table>
           </div>
@@ -278,13 +441,28 @@ const Lobby = () => {
         </table>
 
         <div className="flex-row flex-center">
-          <button className="flex-item" onClick={() => backupWallet()}><Download size={12} /> BACKUP</button>
-          <button className="flex-item" onClick={() => restoreWallet()}><Upload size={12} /> RESTORE</button>
-          <button className="flex-item" onClick={() => resetWallet()}><Trash2 size={12} /> RESET</button>
+          <button className="flex-item" onClick={() => backupWallet()} disabled={busyAction !== ''}><Download size={12} /> BACKUP</button>
+          <button className="flex-item" onClick={() => restoreWallet()} disabled={busyAction !== ''}><Upload size={12} /> RESTORE</button>
+          <button className="flex-item" onClick={() => resetWallet()} disabled={busyAction !== ''}><Trash2 size={12} /> RESET</button>
+        </div>
+        <div className="flex-row flex-center">
+          <button className="flex-item" onClick={() => mintTestChips()} disabled={busyAction === 'mint'}><Coins size={12} /> MINT TEST CHIPS</button>
         </div>
         <div className="spacer"></div>
         <div className="flex-row flex-center">
-          <button className="flex-item" onClick={() => connectWallet()}><SquareMousePointer size={12} /> CONNECT METAMASK</button>
+          <button className="flex-item" onClick={() => connectWallet()} disabled={busyAction === 'connectWallet'}><SquareMousePointer size={12} /> CONNECT METAMASK</button>
+        </div>
+        <div className="wallet-settings">
+          <div className="text-big">RPC Settings</div>
+          <p className="text-small grey">Used for Base Sepolia reads and when adding the network to MetaMask.</p>
+          <div className="form-group">
+            <label>Base Sepolia RPC URL</label>
+            <input type="text" value={rpcUrl} onChange={handleRpcUrlChange} placeholder="https://..." />
+          </div>
+          <div className="flex-row flex-center">
+            <button className="flex-item" onClick={saveRpcUrl} disabled={busyAction === 'rpc'}>SAVE RPC</button>
+            <button className="flex-item" onClick={resetRpcUrl} disabled={busyAction !== ''}>RESET</button>
+          </div>
         </div>
         <div id="wallet-assets" className="flex-column"></div>
       </TabPanel>
@@ -338,7 +516,7 @@ const Lobby = () => {
         <label>Private Game: </label>
         <input type="checkbox" value={newGame.privateGame} name="privateGame" onChange={handleNewGameChange} />
       </div>
-      <button type="button" onClick={launchGame}>Launch New Game</button>
+      <button type="button" onClick={launchGame} disabled={busyAction === 'launch'}>Launch New Game</button>
     </div>
   </div>
   );

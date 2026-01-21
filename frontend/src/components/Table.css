@@ -128,6 +128,20 @@
 	position: relative;
 }
 
+.seat-action {
+	outline: 2px solid #22B879;
+	border-radius: 10px;
+}
+
+.seat-folded {
+	opacity: 0.5;
+}
+
+.player-status {
+	font-size: 0.75em;
+	color: #22B879;
+}
+
 .player-frame {
 	width: 200px;
     position: absolute;
@@ -251,6 +265,18 @@
 
 #blind-clock {
 	font-size: 0.3em;
+}
+
+#sng-meta {
+	position: absolute;
+	bottom: 30%;
+	left: 35%;
+	width: 30%;
+	text-align: center;
+	background: rgba(0, 0, 0, 0.6);
+	border-radius: 12px;
+	padding: 8px;
+	font-size: 0.7em;
 }
 
 /* Controls */
