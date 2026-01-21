@@ -232,15 +232,17 @@
 }
 
 #table-notification {
-	background: rgba(0,0,0,0.5);
+	background: rgba(0,0,0,0.2);
 	position: absolute;
-	bottom: 55%;
-	left: 30%;
-	width: 40%;
+	bottom: 52%;
+	left: 50%;
+    transform: translateX(-50%);
+    min-width: 200px;
 	text-align: center;
-	border-radius: 50%;
-	padding: 2%;
-	font-size: 0.9em;
+	border-radius: 25px;
+	padding: 4px 25px;
+	font-size: 0.8em;
+	color: #888;
 }
 
 #blinds {

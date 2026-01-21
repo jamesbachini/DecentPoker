@@ -1,40 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import { Tab, Tabs, TabList, TabPanel } from 'react-tabs';
+import Swal from 'sweetalert2';
+import { Download, Upload, Copy, Wallet, Trash2, SquareMousePointer, RefreshCw, Coins, Users, DollarSign } from 'lucide-react';
 import { ethers } from 'ethers';
 import { pokerLobbyAddress, pokerLobbyABI, pokerChipsAddress, pokerChipsABI } from './Contracts';
-import { Download, Upload, Copy, Wallet, Trash2, SquareMousePointer, RefreshCw, Coins, Users, DollarSign } from 'lucide-react';
-import Swal from 'sweetalert2';
+import Utils from './Utils';
 import 'react-tabs/style/react-tabs.css';
 import './Lobby.css';
 
 let provider = new ethers.JsonRpcProvider('https://sepolia.base.org');
 
-const copyToClipBoard = async (containerid) => {
-  let range;
-  if (document.selection) { 
-    range = document.body.createTextRange();
-    range.moveToElementText(document.getElementById(containerid));
-    range.select().createTextRange();
-    document.execCommand("Copy"); 
-  } else if (window.getSelection) {
-    range = document.createRange();
-    range.selectNode(document.getElementById(containerid));
-    window.getSelection().removeAllRanges();
-    window.getSelection().addRange(range);
-    document.execCommand("Copy");
-  }
-}
 
 const Lobby = () => {
   const [wallet, setWallet] = useState( {address: 'loading...' });
   const [balances, setBalances] = useState({ eth: 0, pkr: 0 });
   const [cashGames, setCashGames] = useState([]);
   const [sitAndGoGames, setSitAndGoGames] = useState([]);
-  const [newGame, setNewGame] = useState({ gameType: "CASH", maxPlayers: 6, bigBlind: 2, privateGame: false, token: "PKR", startingChips: 2000, blindDuration: 10 });
-  const [inviteKey, setInviteKey] = useState({ privateKey: null, publicKey: null, checked: false });
+  const [newGame, setNewGame] = useState({ gameType: "CASH", maxPlayers: 6, bigBlind: 2, token: "PKR", startingChips: 2000, buyIn: 10, blindDuration: 10, privateGame: false });
 
   const backupWallet = async () => {
-    const virtualWallet = await loadWallet();
+    const virtualWallet = await Utils.loadWallet();
     prompt("Your Private Key", virtualWallet.privateKey);
   }
 
@@ -65,24 +50,6 @@ const Lobby = () => {
     const walletJSON = JSON.stringify(newWallet);
     localStorage.setItem('wallet', walletJSON);
     setWallet(walletJSON);
-  }
-
-  const loadWallet = async () => {
-    let walletJSON = localStorage.getItem('wallet');
-    if (walletJSON === null) {
-      await createWallet();
-      walletJSON = localStorage.getItem('wallet');
-    }
-    const wallet = JSON.parse(walletJSON);
-    let virtualWallet;
-    if (wallet.type === 'browser') {
-      provider = new ethers.BrowserProvider(window.ethereum)
-      virtualWallet = await provider.getSigner();
-    } else {
-      const loadedWallet = new ethers.Wallet(wallet.privateKey);
-      virtualWallet = loadedWallet.connect(provider);
-    }
-    return virtualWallet;
   }
 
   const connectWallet = async () => {
@@ -132,9 +99,9 @@ const Lobby = () => {
     }
   }
 
-  const loadGame = async () => {
+  const loadGame = async (gid) => {
     alert('coming soon');
-    window.location = '/#/table';
+    window.location = `/#/table?gid=0`;
   }
 
   const handleNewGameChange = (e) => {
@@ -145,52 +112,42 @@ const Lobby = () => {
     });
   };
 
-  const createKeyPair = () => {
-    const randomBytes = ethers.randomBytes(32);
-    const privateKey = ethers.hexlify(randomBytes);
-    const publicKey = ethers.keccak256(privateKey);
-    return { privateKey, publicKey }
-  }
 
-  const handlePrivateGameCode = () => {
-    if (inviteKey.checked == false) {
-      const inviteKeys = createKeyPair();
-      inviteKeys.checked = true;
-      setInviteKey(inviteKeys);
-    } else {
-      setInviteKey({ privateKey: null, publicKey: null, checked: false });
-    }
-  }
 
-  const inviteLink = () => {
-    if (inviteKey.privateKey) {
-      return (
-        <a
-          className="invite-link"
-          href={`https://decentpoker.org/#/table?invite=${inviteKey.privateKey}`}
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          {`https://decentpoker.org/#/table?invite=${inviteKey.privateKey}`}
-        </a>
-      );
-    }
-    return null; // Optionally return null if inviteKey.privateKey is not present
-  };
-
-  const newCashGame = async () => {
+  const launchGame = async () => {
     console.log('Launching new game with settings:', newGame);
-    return;
-    const maxPlayers = document.getElementById('maxPlayers').value;
-    const bigBlind = document.getElementById('bigBlind').value;
-    const nullHash = '0x' + '0'.repeat(64);
-    const invitePublicKey = document.getElementById('invitePublicKey').value || nullHash;
-
+    let inviteKeys = {};
+    if (newGame.privateGame === true) {
+      inviteKeys.publicKey = '0x' + '0'.repeat(64);
+    } else {
+      inviteKeys = Utils.createKeyPair();
+    }
+    const bigBlind = ethers.parseUnits(newGame.bigBlind.toString(), 6);
+    let buyIn = ethers.parseUnits((newGame.bigBlind * 100).toString(), 6);
+    let gameId;
+    if (newGame.gameType == 'SNG') buyIn = ethers.parseUnits(newGame.buyIn, 6);
     try {
-        const pokerLobby = new ethers.Contract(pokerLobbyAddress, pokerLobbyABI, provider);
-        const tx = await pokerLobby.createCashGame(maxPlayers, bigBlind, invitePublicKey, pokerChipsAddress);
-        await tx.wait();
-        alert("Game created successfully");
+        const virtualWallet = await Utils.loadWallet();
+        const pokerLobby = new ethers.Contract(pokerLobbyAddress, pokerLobbyABI, virtualWallet);
+        let tx;
+        if (newGame.gameType == 'CASH') {
+          tx = await pokerLobby.createCashGame(newGame.maxPlayers, bigBlind, inviteKeys.publicKey, pokerChipsAddress);
+        } else if (newGame.gameType == 'SNG') {
+          tx = await pokerLobby.createSitAndGo(newGame.maxPlayers, bigBlind, newGame.blindDuration, newGame.startingChips, inviteKeys.publicKey, newGame.buyIn, pokerChipsAddress);
+        }
+        const receipt = await tx.wait();
+        gameId = receipt.logs[1].args[0];
+        if (newGame.privateGame === true) localStorage.setItem(`inviteKey_${gameId}`, inviteKeys.privateKey);
+        if (await Swal.fire({ title: 'Join New Game?', text: "For the game to be displayed in the lobby it must have at least one player. Approve spend and then join the game", icon: 'success', showCancelButton: true, confirmButtonText: 'Yes' }).then(result => result.isConfirmed)) {
+          const pokerChips = new ethers.Contract(pokerChipsAddress, pokerChipsABI, virtualWallet);
+          await pokerChips.approve(await pokerLobbyAddress, buyIn);
+          if (newGame.privateGame == true) {
+            window.location = `/#/table?gid=${gameId}&inviteKey=${inviteKeys.privateKey}`;
+          } else {
+            window.location = `/#/table?gid=${gameId}`;
+          }
+          
+        }
     } catch (error) {
         console.error("Failed to create game:", error);
     }
@@ -221,7 +178,7 @@ const Lobby = () => {
       </TabList>
 
       <TabPanel>
-        <div className="flex-row flex-middle flex-center">
+        <div>
           <table className="lobby-table">
             <thead>
                 <tr>
@@ -238,39 +195,48 @@ const Lobby = () => {
                     <td>3/6</td>
                     <td>1/2</td>
                     <td>200 PKR</td>
-                    <td><button onClick={() => loadGame()}>JOIN</button></td>
+                    <td><button onClick={() => loadGame(0)}>JOIN</button></td>
                 </tr>
             </tbody>
           </table>
         </div>
       </TabPanel>
       <TabPanel>
-      <div className="flex-row flex-middle flex-center">
-          <div className="flex-item game-card pointer" onClick={() => loadGame()}>
-            <div className="purple bold text-big">No Limit Hold'em</div>
-            <img src="/img/game-card.webp" alt="Game Card" />
-            <div><Users size={12} className="green" /> Players 5/6</div>
-            <div><Coins size={12} className="green" /> Turbo SnG</div>
-            <div><DollarSign size={12} className="green" /> Buy In 100 PKR</div>
-            <button>JOIN GAME</button>
+        <div>
+            <table className="lobby-table">
+              <thead>
+                  <tr>
+                      <th>Game</th>
+                      <th>Players</th>
+                      <th>Blinds</th>
+                      <th>Starting Chips</th>
+                      <th>Blind Duration</th>
+                      <th>Buy In</th>
+                      <th>Actions</th>
+                  </tr>
+              </thead>
+              <tbody>
+                  <tr>
+                      <td>Multideck Holdem</td>
+                      <td>1/6</td>
+                      <td>10/20</td>
+                      <td>2000</td>
+                      <td>10 mins</td>
+                      <td>100 PKR</td>
+                      <td><button onClick={() => loadGame(0)}>JOIN</button></td>
+                  </tr>
+                  <tr>
+                      <td>Multideck Holdem</td>
+                      <td>2/3</td>
+                      <td>1/2</td>
+                      <td>5000</td>
+                      <td>15 mins</td>
+                      <td>50 PKR</td>
+                      <td><button onClick={() => loadGame(0)}>JOIN</button></td>
+                  </tr>
+              </tbody>
+            </table>
           </div>
-          <div className="flex-item game-card pointer" onClick={() => loadGame()}>
-            <div className="purple bold text-big">No Limit Hold'em</div>
-            <img src="/img/game-card.webp" alt="Game Card" />
-            <div><Users size={12} className="green" /> Players 7/9</div>
-            <div><Coins size={12} className="green" /> Deep Stack SnG</div>
-            <div><DollarSign size={12} className="green" /> Buy In 500 PKR</div>
-            <button>JOIN GAME</button>
-          </div>
-          <div className="flex-item game-card pointer" onClick={() => loadGame()}>
-            <div className="purple bold text-big">No Limit Hold'em</div>
-            <img src="/img/game-card.webp" alt="Game Card" />
-            <div><Users size={12} className="green" /> Players 1/9</div>
-            <div><Coins size={12} className="green" /> Turbo SnG</div>
-            <div><DollarSign size={12} className="green" /> Buy In 100 PKR</div>
-            <button>JOIN GAME</button>
-          </div>
-        </div>
       </TabPanel>
       <TabPanel>
         <div>
@@ -286,7 +252,7 @@ const Lobby = () => {
             <div className="text-big green">Connected</div>
             <div className="text-small grey">{getWallet().type}</div>
           </div>
-          <div className="flex-row flex-middle flex-center pointer" onClick={() => copyToClipBoard('wallet-address')}>
+          <div className="flex-row flex-middle flex-center pointer" onClick={() => Utils.copyToClipBoard('wallet-address')}>
             <span id="wallet-address" className="text-small purple">{getWallet().address}</span>
             &nbsp; <Copy className="green" size={12} />
           </div>
@@ -350,27 +316,29 @@ const Lobby = () => {
             <label>Blilnd Duration (mins): </label>
             <input type="number" min="1" max="99999999" step="1" name="blindDuration" value={newGame.blindDuration} onChange={handleNewGameChange} />
           </div>
+          <div className="form-group">
+            <label>Buy In: </label>
+            <input type="number" min="0.01" max="99999999" step="1" name="buyIn" value={newGame.buyIn} onChange={handleNewGameChange} />
+          </div>
         </div>
       ) : (
-        <div>
-          <div className="form-group">
-            <label>Token:</label>
-            <select name="token" value={newGame.token} onChange={handleNewGameChange}>
-              <option value="PKR">PKR</option>
-              <option value="ETH" disabled>ETH</option>
-              <option value="USDC" disabled>USDC</option>
-              <option value="USDT" disabled>USDT</option>
-            </select>
-          </div>
-          <p>PKR is a free testnet poker chip</p>
-        </div>
+        <div></div>
       )}
       <div className="form-group">
-        <label>Private Game: </label>
-        <input type="checkbox" checked={newGame.checked} onChange={handlePrivateGameCode} />
-        <div className="text-small">{inviteLink()}</div>
+        <label>Token:</label>
+        <select name="token" value={newGame.token} onChange={handleNewGameChange}>
+          <option value="PKR">PKR</option>
+          <option value="ETH" disabled>ETH</option>
+          <option value="USDC" disabled>USDC</option>
+          <option value="USDT" disabled>USDT</option>
+        </select>
       </div>
-      <button type="button" onClick={newCashGame}>Launch Cash Game</button>
+      <p className="text-small">PKR is a free testnet poker chip</p>
+      <div className="form-group">
+        <label>Private Game: </label>
+        <input type="checkbox" value={newGame.privateGame} name="privateGame" onChange={handleNewGameChange} />
+      </div>
+      <button type="button" onClick={launchGame}>Launch New Game</button>
     </div>
   </div>
   );

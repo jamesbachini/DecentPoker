@@ -149,7 +149,7 @@ Another challenge is the potential for poker bots. Automated programs can be des
 
 1. **Reputation Systems:** Develop a reputation system where players can create some form of social graph of the players they know and/or can rate each other. Could link to existing social graphs in a similar way to @Friend.tech did with X/Twitter. This would all need to be done as a separate frontend system and would be separate from the underlying contract code.
 
-2. **Statistical Analysis:** Use algorithms to analyze game patterns and detect unusual betting that may indicate collusion or bots, flag these users on the frontend to warn other players. Again could only be implimented at a frontend level.
+2. **Statistical Analysis:** Use algorithms to analyze game patterns and detect unusual betting that may indicate collusion or bots, flag these users on the frontend to warn other players. Again could only be implemented at a frontend level.
 
 3. **Home Games:** Encourage users to setup home games with their friends using a private code which allows access. This way they can ensure they are playing against the people they know and trust... on a trustless platform. 
 
