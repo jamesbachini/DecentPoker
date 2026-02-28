@@ -105,10 +105,10 @@ const Lobby = () => {
   }, []);
 
   const handleNewGameChange = (e) => {
-    const { name, value } = e.target;
+    const { name, value, type, checked } = e.target;
     setNewGame({
       ...newGame,
-      [name]: value,
+      [name]: type === 'checkbox' ? checked : value,
     });
   };
 
@@ -256,17 +256,17 @@ const Lobby = () => {
     console.log('Launching new game with settings:', newGame);
     setBusyAction('launch');
     let inviteKeys = {};
-    if (newGame.privateGame === true) {
-      inviteKeys.publicKey = '0x' + '0'.repeat(64);
-    } else {
+    if (newGame.privateGame) {
       inviteKeys = Utils.createKeyPair();
+    } else {
+      inviteKeys.publicKey = ZERO_HASH;
     }
     const bigBlind = ethers.parseUnits(newGame.bigBlind.toString(), 6);
     let buyIn = ethers.parseUnits((newGame.bigBlind * 100).toString(), 6);
     let gameId;
     if (newGame.gameType === 'SNG') buyIn = ethers.parseUnits(newGame.buyIn, 6);
     try {
-        const { signer } = await Utils.loadWallet();
+        const { signer, wallet } = await Utils.loadWallet();
         const pokerLobby = new ethers.Contract(pokerLobbyAddress, pokerLobbyABI, signer);
         let tx;
         if (newGame.gameType === 'CASH') {
@@ -275,13 +275,32 @@ const Lobby = () => {
           tx = await pokerLobby.createSitAndGo(newGame.maxPlayers, bigBlind, newGame.blindDuration, newGame.startingChips, inviteKeys.publicKey, newGame.buyIn, pokerChipsAddress);
         }
         const receipt = await tx.wait();
-        gameId = receipt.logs[1].args[0];
+        const createdLog = receipt.logs.find((log) => (
+          (newGame.gameType === 'CASH' && log?.fragment?.name === 'CashGameCreated')
+          || (newGame.gameType === 'SNG' && log?.fragment?.name === 'SitAndGoCreated')
+        ));
+        gameId = createdLog?.args?.[0] ?? receipt.logs?.[1]?.args?.[0];
+        if (gameId === undefined || gameId === null) throw new Error('Could not resolve created game ID from receipt');
         const gameIdString = gameId.toString();
-        if (newGame.privateGame === true) localStorage.setItem(`inviteKey_${gameIdString}`, inviteKeys.privateKey);
+        if (newGame.privateGame) localStorage.setItem(`inviteKey_${gameIdString}`, inviteKeys.privateKey);
         if (await Swal.fire({ title: 'Join New Game?', text: "For the game to be displayed in the lobby it must have at least one player. Approve spend and then join the game", icon: 'success', showCancelButton: true, confirmButtonText: 'Yes' }).then(result => result.isConfirmed)) {
           const pokerChips = new ethers.Contract(pokerChipsAddress, pokerChipsABI, signer);
-          await pokerChips.approve(await pokerLobbyAddress, buyIn);
-          if (newGame.privateGame === true) {
+          const handKeys = Utils.ensureHandKeys(gameIdString);
+          const invitePrivateKey = newGame.privateGame ? inviteKeys.privateKey : ZERO_HASH;
+          const joinBuyIn = newGame.gameType === 'SNG' ? buyIn : (bigBlind * 100n);
+          const allowance = await pokerChips.allowance(wallet.address, pokerLobbyAddress);
+          if (allowance < joinBuyIn) {
+            const approveTx = await pokerChips.approve(pokerLobbyAddress, joinBuyIn);
+            await approveTx.wait();
+          }
+          let joinTx;
+          if (newGame.gameType === 'SNG') {
+            joinTx = await pokerLobby.registerSitAndGo(gameId, 0, handKeys.currentPublicKey, invitePrivateKey);
+          } else {
+            joinTx = await pokerLobby.joinCashGame(gameId, 0, handKeys.currentPublicKey, invitePrivateKey);
+          }
+          await joinTx.wait();
+          if (newGame.privateGame) {
             window.location = `/#/table?gid=${gameIdString}&inviteKey=${inviteKeys.privateKey}`;
           } else {
             window.location = `/#/table?gid=${gameIdString}`;
@@ -514,7 +533,7 @@ const Lobby = () => {
       <p className="text-small">PKR is a free testnet poker chip</p>
       <div className="form-group">
         <label>Private Game: </label>
-        <input type="checkbox" value={newGame.privateGame} name="privateGame" onChange={handleNewGameChange} />
+        <input type="checkbox" checked={!!newGame.privateGame} name="privateGame" onChange={handleNewGameChange} />
       </div>
       <button type="button" onClick={launchGame} disabled={busyAction === 'launch'}>Launch New Game</button>
     </div>
